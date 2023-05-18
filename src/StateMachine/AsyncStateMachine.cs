@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 #if UNITASK
@@ -48,25 +49,25 @@ namespace FSM
             // By default, these fields are all null and only get a value when you need them
             // => Lazy evaluation => Memory efficient, when you only need a subset of features
             public AsyncStateBase<TStateId> state;
-            public List<TransitionBase<TStateId>> transitions;
-            public Dictionary<TEvent, List<TransitionBase<TStateId>>> triggerToTransitions;
+            public List<AsyncTransitionBase<TStateId>> transitions;
+            public Dictionary<TEvent, List<AsyncTransitionBase<TStateId>>> triggerToTransitions;
 
-            public void AddTransition(TransitionBase<TStateId> t)
+            public void AddTransition(AsyncTransitionBase<TStateId> t)
             {
-                transitions = transitions ?? new List<TransitionBase<TStateId>>();
+                transitions = transitions ?? new List<AsyncTransitionBase<TStateId>>();
                 transitions.Add(t);
             }
 
-            public void AddTriggerTransition(TEvent trigger, TransitionBase<TStateId> transition)
+            public void AddTriggerTransition(TEvent trigger, AsyncTransitionBase<TStateId> transition)
             {
                 triggerToTransitions = triggerToTransitions
-                    ?? new Dictionary<TEvent, List<TransitionBase<TStateId>>>();
+                    ?? new Dictionary<TEvent, List<AsyncTransitionBase<TStateId>>>();
 
-                List<TransitionBase<TStateId>> transitionsOfTrigger;
+                List<AsyncTransitionBase<TStateId>> transitionsOfTrigger;
 
                 if (!triggerToTransitions.TryGetValue(trigger, out transitionsOfTrigger))
                 {
-                    transitionsOfTrigger = new List<TransitionBase<TStateId>>();
+                    transitionsOfTrigger = new List<AsyncTransitionBase<TStateId>>();
                     triggerToTransitions.Add(trigger, transitionsOfTrigger);
                 }
 
@@ -75,10 +76,10 @@ namespace FSM
         }
 
         // A cached empty list of transitions (For improved readability, less GC)
-        private static readonly List<TransitionBase<TStateId>> noTransitions
-            = new List<TransitionBase<TStateId>>(0);
-        private static readonly Dictionary<TEvent, List<TransitionBase<TStateId>>> noTriggerTransitions
-            = new Dictionary<TEvent, List<TransitionBase<TStateId>>>(0);
+        private static readonly List<AsyncTransitionBase<TStateId>> noTransitions
+            = new List<AsyncTransitionBase<TStateId>>(0);
+        private static readonly Dictionary<TEvent, List<AsyncTransitionBase<TStateId>>> noTriggerTransitions
+            = new Dictionary<TEvent, List<AsyncTransitionBase<TStateId>>>(0);
 
         private (TStateId state, bool hasState) startState = (default, false);
         private (TStateId state, bool isPending) pendingState = (default, false);
@@ -88,13 +89,13 @@ namespace FSM
             = new Dictionary<TStateId, StateBundle>();
 
         private AsyncStateBase<TStateId> activeState = null;
-        private List<TransitionBase<TStateId>> activeTransitions = noTransitions;
-        private Dictionary<TEvent, List<TransitionBase<TStateId>>> activeTriggerTransitions = noTriggerTransitions;
+        private List<AsyncTransitionBase<TStateId>> activeTransitions = noTransitions;
+        private Dictionary<TEvent, List<AsyncTransitionBase<TStateId>>> activeTriggerTransitions = noTriggerTransitions;
 
-        private List<TransitionBase<TStateId>> transitionsFromAny
-            = new List<TransitionBase<TStateId>>();
-        private Dictionary<TEvent, List<TransitionBase<TStateId>>> triggerTransitionsFromAny
-            = new Dictionary<TEvent, List<TransitionBase<TStateId>>>();
+        private List<AsyncTransitionBase<TStateId>> transitionsFromAny
+            = new List<AsyncTransitionBase<TStateId>>();
+        private Dictionary<TEvent, List<AsyncTransitionBase<TStateId>>> triggerTransitionsFromAny
+            = new Dictionary<TEvent, List<AsyncTransitionBase<TStateId>>>();
 
         public AsyncStateBase<TStateId> ActiveState
         {
@@ -140,27 +141,27 @@ namespace FSM
         /// </summary>
         /// <returns>Returns true if the state machine could execute a pending state change
         /// 	and false if it remained in its current state</returns>
-        public bool StateCanExit()
-        {
-            if (TryToExitStateMachine())
-            {
-                return true;
-            }
+        // public bool StateCanExit()
+        // {
+        //     if (TryToExitStateMachine())
+        //     {
+        //         return true;
+        //     }
 
-            if (!pendingState.isPending)
-            {
-                return false;
-            }
+        //     if (!pendingState.isPending)
+        //     {
+        //         return false;
+        //     }
 
-            TStateId state = pendingState.state;
-            // When the pending state is a ghost state, ChangeState() will have
-            // to try all outgoing transitions, which may overwrite the pendingState.
-            // That's why it is first cleared, and not afterwards, as that would overwrite
-            // a new, valid pending state.
-            pendingState = (default, false);
-            ChangeState(state);
-            return true;
-        }
+        //     TStateId state = pendingState.state;
+        //     // When the pending state is a ghost state, ChangeState() will have
+        //     // to try all outgoing transitions, which may overwrite the pendingState.
+        //     // That's why it is first cleared, and not afterwards, as that would overwrite
+        //     // a new, valid pending state.
+        //     pendingState = (default, false);
+        //     ChangeState(state);
+        //     return true;
+        // }
 
         /// <summary>
         /// Notifies the state machine that it can cleanly exit so that the parent state machine
@@ -199,9 +200,17 @@ namespace FSM
         /// Instantly changes to the target state
         /// </summary>
         /// <param name="name">The name / identifier of the active state</param>
-        private void ChangeState(TStateId name)
+        private async void ChangeState(TStateId name)
         {
-            activeState?.OnExit();
+            try
+            {
+                await activeState?.OnExitAsync();
+                activeState?.OnExit();
+            }
+            catch
+            {
+                throw new Exception("OnExitAsync failed");
+            }
 
             StateBundle bundle;
 
@@ -214,14 +223,21 @@ namespace FSM
             activeTriggerTransitions = bundle.triggerToTransitions ?? noTriggerTransitions;
 
             activeState = bundle.state;
-            activeState.OnEnter();
-
+            try
+            {
+                await activeState.OnEnterAsync();
+                activeState.OnEnter();
+            }
+            catch
+            {
+                throw new Exception("OnEnterAsync failed");
+            }
             for (int i = 0; i < activeTransitions.Count; i++)
             {
                 activeTransitions[i].OnEnter();
             }
 
-            foreach (List<TransitionBase<TStateId>> transitions in activeTriggerTransitions.Values)
+            foreach (List<AsyncTransitionBase<TStateId>> transitions in activeTriggerTransitions.Values)
             {
                 for (int i = 0; i < transitions.Count; i++)
                 {
@@ -231,7 +247,7 @@ namespace FSM
 
             if (activeState.isGhostState)
             {
-                TryToExitGhostState();
+                TryToExitGhostState();//TODO:async
             }
         }
 
@@ -264,7 +280,7 @@ namespace FSM
             // }
 
             // return fsm.StateCanExit();
-            return true;
+            return false;
         }
 
         /// <summary>
@@ -284,10 +300,10 @@ namespace FSM
             //     pendingState = (name, true);
             //     activeState.OnExitRequest();
             //     /**
-			// 	 * If it can exit, the activeState would call
-			// 	 * -> state.fsm.StateCanExit() which in turn would call
-			// 	 * -> fsm.ChangeState(...)
-			// 	 */
+            // 	 * If it can exit, the activeState would call
+            // 	 * -> state.fsm.StateCanExit() which in turn would call
+            // 	 * -> fsm.ChangeState(...)
+            // 	 */
             // }
         }
 
@@ -297,7 +313,7 @@ namespace FSM
         /// </summary>
         /// <param name="transition"></param>
         /// <returns></returns>
-        private bool TryTransition(TransitionBase<TStateId> transition)
+        private bool TryTransition(AsyncTransitionBase<TStateId> transition)
         {
             if (!transition.ShouldTransition())
                 return false;
@@ -352,7 +368,7 @@ namespace FSM
                 transitionsFromAny[i].OnEnter();
             }
 
-            foreach (List<TransitionBase<TStateId>> transitions in triggerTransitionsFromAny.Values)
+            foreach (List<AsyncTransitionBase<TStateId>> transitions in triggerTransitionsFromAny.Values)
             {
                 for (int i = 0; i < transitions.Count; i++)
                 {
@@ -369,7 +385,7 @@ namespace FSM
         {
             for (int i = 0; i < transitionsFromAny.Count; i++)
             {
-                TransitionBase<TStateId> transition = transitionsFromAny[i];
+                AsyncTransitionBase<TStateId> transition = transitionsFromAny[i];
 
                 // Don't transition to the "to" state, if that state is already the active state
                 if (EqualityComparer<TStateId>.Default.Equals(transition.to, activeState.name))
@@ -390,7 +406,7 @@ namespace FSM
         {
             for (int i = 0; i < activeTransitions.Count; i++)
             {
-                TransitionBase<TStateId> transition = activeTransitions[i];
+                AsyncTransitionBase<TStateId> transition = activeTransitions[i];
 
                 if (TryTransition(transition))
                     return true;
@@ -480,7 +496,7 @@ namespace FSM
         /// Initialises a transition, i.e. sets its fsm attribute, and then calls its Init method.
         /// </summary>
         /// <param name="transition"></param>
-        private void InitTransition(TransitionBase<TStateId> transition)
+        private void InitTransition(AsyncTransitionBase<TStateId> transition)
         {
             //transition.fsm = this;
             transition.Init();
@@ -490,7 +506,7 @@ namespace FSM
         /// Adds a new transition between two states.
         /// </summary>
         /// <param name="transition">The transition instance</param>
-        public void AddTransition(TransitionBase<TStateId> transition)
+        public void AddTransition(AsyncTransitionBase<TStateId> transition)
         {
             InitTransition(transition);
 
@@ -503,7 +519,7 @@ namespace FSM
         /// </summary>
         /// <param name="transition">The transition instance; The "from" field can be
         /// left empty, as it has no meaning in this context.</param>
-        public void AddTransitionFromAny(TransitionBase<TStateId> transition)
+        public void AddTransitionFromAny(AsyncTransitionBase<TStateId> transition)
         {
             InitTransition(transition);
 
@@ -516,7 +532,7 @@ namespace FSM
         /// </summary>
         /// <param name="trigger">The name / identifier of the trigger</param>
         /// <param name="transition">The transition instance, e.g. Transition, TransitionAfter, ...</param>
-        public void AddTriggerTransition(TEvent trigger, TransitionBase<TStateId> transition)
+        public void AddTriggerTransition(TEvent trigger, AsyncTransitionBase<TStateId> transition)
         {
             InitTransition(transition);
 
@@ -531,15 +547,15 @@ namespace FSM
         /// <param name="trigger">The name / identifier of the trigger</param>
         /// <param name="transition">The transition instance; The "from" field can be
         /// left empty, as it has no meaning in this context.</param>
-        public void AddTriggerTransitionFromAny(TEvent trigger, TransitionBase<TStateId> transition)
+        public void AddTriggerTransitionFromAny(TEvent trigger, AsyncTransitionBase<TStateId> transition)
         {
             InitTransition(transition);
 
-            List<TransitionBase<TStateId>> transitionsOfTrigger;
+            List<AsyncTransitionBase<TStateId>> transitionsOfTrigger;
 
             if (!triggerTransitionsFromAny.TryGetValue(trigger, out transitionsOfTrigger))
             {
-                transitionsOfTrigger = new List<TransitionBase<TStateId>>();
+                transitionsOfTrigger = new List<AsyncTransitionBase<TStateId>>();
                 triggerTransitionsFromAny.Add(trigger, transitionsOfTrigger);
             }
 
@@ -556,12 +572,12 @@ namespace FSM
         /// Internally the same transition instance will be used for both transitions
         /// by wrapping it in a ReverseTransition.
         /// </remarks>
-        public void AddTwoWayTransition(TransitionBase<TStateId> transition)
+        public void AddTwoWayTransition(AsyncTransitionBase<TStateId> transition)
         {
             InitTransition(transition);
             AddTransition(transition);
 
-            ReverseTransition<TStateId> reverse = new ReverseTransition<TStateId>(transition, false);
+            AsyncReverseTransition<TStateId> reverse = new AsyncReverseTransition<TStateId>(transition, false);
             InitTransition(reverse);
             AddTransition(reverse);
         }
@@ -576,12 +592,12 @@ namespace FSM
         /// Internally the same transition instance will be used for both transitions
         /// by wrapping it in a ReverseTransition.
         /// </remarks>
-        public void AddTwoWayTriggerTransition(TEvent trigger, TransitionBase<TStateId> transition)
+        public void AddTwoWayTriggerTransition(TEvent trigger, AsyncTransitionBase<TStateId> transition)
         {
             InitTransition(transition);
             AddTriggerTransition(trigger, transition);
 
-            ReverseTransition<TStateId> reverse = new ReverseTransition<TStateId>(transition, false);
+            AsyncReverseTransition<TStateId> reverse = new AsyncReverseTransition<TStateId>(transition, false);
             InitTransition(reverse);
             AddTriggerTransition(trigger, reverse);
         }
@@ -596,13 +612,13 @@ namespace FSM
         {
             EnsureIsInitializedFor("Checking all trigger transitions of the active state");
 
-            List<TransitionBase<TStateId>> triggerTransitions;
+            List<AsyncTransitionBase<TStateId>> triggerTransitions;
 
             if (triggerTransitionsFromAny.TryGetValue(trigger, out triggerTransitions))
             {
                 for (int i = 0; i < triggerTransitions.Count; i++)
                 {
-                    TransitionBase<TStateId> transition = triggerTransitions[i];
+                    AsyncTransitionBase<TStateId> transition = triggerTransitions[i];
 
                     if (EqualityComparer<TStateId>.Default.Equals(transition.to, activeState.name))
                         continue;
@@ -616,7 +632,7 @@ namespace FSM
             {
                 for (int i = 0; i < triggerTransitions.Count; i++)
                 {
-                    TransitionBase<TStateId> transition = triggerTransitions[i];
+                    AsyncTransitionBase<TStateId> transition = triggerTransitions[i];
 
                     if (TryTransition(transition))
                         return true;
